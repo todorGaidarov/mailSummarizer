@@ -2,23 +2,27 @@
 from collections import OrderedDict
 
 import nltk
+from nltk.tokenize import sent_tokenize, word_tokenize
+nltk.download('punkt')
+nltk.download("stopwords")
+from nltk.corpus import stopwords
+
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import networkx as nx
 
-nltk.download('punkt')
-from nltk.tokenize import sent_tokenize, word_tokenize
-from nltk.corpus import stopwords
 import spacy
 import string
 import re
 
+
 SIMPLE_URL_REGEX = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+')
 PARAGRAPH_REGEX = re.compile(r'\n\n+')
-CHARS_REGEX = re.compile(r'[^a-zA-Z0-9]')
+CHARS_REGEX = re.compile(r'[^a-zA-Z0-9\s]')
 
-NES_CATEGORIES = {'PERSON', 'FAC', 'ORG', 'GPE', 'DATE', 'TIME', 'MONEY'}
+NES_CATEGORIES = {'PERSON': 'person', 'ORG': 'organization', 'GPE': 'place', 'DATE': 'date/period', 'TIME': 'time', 'MONEY': 'money'}
 MIN_SENTENCES = 10
+SUMM_COEF = 3
 
 class Summarizer:
     def __init__(self):
@@ -26,16 +30,29 @@ class Summarizer:
         self.__nlp = spacy.load("en_core_web_lg")
 
     def get_summary(self, text):
-        pass
+        result = {}
+        vectors, nes, sentences = self.__get_text_info(text)
+
+        result['entities'] = nes
+        summary_sents = sentences
+        if len(sentences) > MIN_SENTENCES:
+            sorted_scores = self.__get_text_rank_scores(vectors)
+            summary_size = len(sentences) // SUMM_COEF
+            max_idx = sorted([item[0] for item in sorted_scores[:summary_size]])
+            summary_sents = [sentences[idx] for idx in max_idx]
+
+        result['summary'] = '\n'.join(summary_sents)
+
+        return result
 
     def __clean_text(self, text):
         text = SIMPLE_URL_REGEX.sub('', text)
-        text = PARAGRAPH_REGEX.sub('\n', text)
+        text = PARAGRAPH_REGEX.sub('', text)
 
         return text
 
     def __get_embeddings_spacy(self, texts):
-        docs = self.__nlp.pipe(texts, disabled=['tagger', 'parser'])
+        docs = self.__nlp.pipe(texts, disable=['tagger', 'parser'])
         vectors = [doc.vector for doc in docs]
         return vectors
 
@@ -49,24 +66,24 @@ class Summarizer:
         for idx, doc in enumerate(sent_docs):
             for ent in doc.ents:
                 sent_ents = OrderedDict()
-                if ent.text not in sent_ents and ent.label_ in NES_CATEGORIES:
-                    sent_ents[ent.text] = ent.label_
+                if ent.text not in sent_ents and ent.label_ in NES_CATEGORIES.keys():
+                    sent_ents[ent.text] = NES_CATEGORIES[ent.label_]
                 nes[idx] = sent_ents
 
         vectors = []
         # remove the sentences with no valuable content
         if len(sentences) > MIN_SENTENCES:
-            sentences_to_sign = self.__get_sign_sents(sentences)
+            sentences_to_sign = self.__get_significant_sentences(sentences)
 
             if len(sentences_to_sign) > 0:
-                sentences = sentences_to_sign.keys()
+                sentences = list(sentences_to_sign.keys())
                 vectors = self.__get_embeddings_spacy(list(sentences_to_sign.values()))
 
         return (vectors, nes, sentences)
 
     def __get_significant_sentences(self, sentences):
         sentence_to_sign_info = OrderedDict()
-        stop_wrds = set(stopwords.words)
+        stop_wrds = set(stopwords.words())
 
         for sentence in sentences:
             words = word_tokenize(sentence)
@@ -89,7 +106,9 @@ class Summarizer:
         nx_graph = nx.from_numpy_array(sim_matrix)
         scores = nx.pagerank(nx_graph)
 
-        return scores
+        sorted_scores = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        return sorted_scores
+
 
 
 
@@ -151,5 +170,12 @@ if __name__ == '__main__':
 
     — Dan Bader"""
 
-    dummy_sent = "#   () ~~~~~ >>>>>>>> <<<<<<"
-    print(CHARS_REGEX.sub('', dummy_sent).strip())
+    summarizer = Summarizer()
+    summary = summarizer.get_summary(test_mail)
+
+    print(summary['entities'])
+    print(summary['summary'])
+
+    # print(stopwords.words())
+    # dummy_sent = "#   () ~~~~~ >>>>>>>> <<<<<<"
+    # print(CHARS_REGEX.sub('', dummy_sent).strip())
